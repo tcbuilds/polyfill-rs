@@ -285,6 +285,11 @@ impl ClobClient {
         self.api_creds = Some(api_creds);
     }
 
+    /// Replace the order builder (e.g., to change sig_type or funder address)
+    pub fn set_order_builder(&mut self, order_builder: crate::orders::OrderBuilder) {
+        self.order_builder = Some(order_builder);
+    }
+
     /// Start background keep-alive to maintain warm connection
     /// Sends periodic lightweight requests to prevent connection drops
     pub async fn start_keepalive(&self, interval: std::time::Duration) {
