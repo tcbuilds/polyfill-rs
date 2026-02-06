@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// Trait for market data streams
 pub trait MarketStream: Stream<Item = Result<StreamMessage>> + Send + Sync {
@@ -187,7 +187,7 @@ impl WebSocketStream {
         self.send_message(message).await?;
         self.subscriptions.push(subscription.clone());
 
-        info!("Subscribed to {} channel", subscription.channel_type);
+        trace!("Subscribed to {} channel", subscription.channel_type);
         Ok(())
     }
 
