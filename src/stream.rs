@@ -130,18 +130,23 @@ impl WebSocketStream {
     }
 
     /// Connect to the WebSocket
+    ///
+    /// Uses `connect_async_with_config` with `disable_nagle=true` to set
+    /// TCP_NODELAY on the underlying socket, eliminating up to 200ms of
+    /// Nagle buffering delay on orderbook updates.
     async fn connect(&mut self) -> Result<()> {
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&self.url)
-            .await
-            .map_err(|e| {
-                PolyfillError::stream(
-                    format!("WebSocket connection failed: {}", e),
-                    crate::errors::StreamErrorKind::ConnectionFailed,
-                )
-            })?;
+        let (ws_stream, _) =
+            tokio_tungstenite::connect_async_with_config(&self.url, None, true)
+                .await
+                .map_err(|e| {
+                    PolyfillError::stream(
+                        format!("WebSocket connection failed: {}", e),
+                        crate::errors::StreamErrorKind::ConnectionFailed,
+                    )
+                })?;
 
         self.connection = Some(ws_stream);
-        info!("Connected to WebSocket stream at {}", self.url);
+        info!("Connected to WebSocket stream at {} (TCP_NODELAY=true)", self.url);
         Ok(())
     }
 
