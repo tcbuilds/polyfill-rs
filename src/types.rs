@@ -1372,8 +1372,10 @@ pub struct Rewards {
 // ============================================================================
 
 /// Fee rate in basis points for a given token.
+/// Polymarket API returns "base_fee" but we expose as fee_rate_bps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeeRateResponse {
+    #[serde(alias = "base_fee")]
     pub fee_rate_bps: u32,
 }
 
