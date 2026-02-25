@@ -147,8 +147,9 @@ impl PolyfillError {
         match self {
             PolyfillError::Network { .. } => true,
             PolyfillError::Api { status, .. } => {
-                // 5xx errors are typically retryable
-                *status >= 500 && *status < 600
+                // 5xx errors are typically retryable.
+                // 425 (Too Early) returned during Polymarket matching engine restarts.
+                (*status >= 500 && *status < 600) || *status == 425
             },
             PolyfillError::Timeout { .. } => true,
             PolyfillError::RateLimit { .. } => true,
@@ -167,7 +168,10 @@ impl PolyfillError {
         match self {
             PolyfillError::Network { .. } => Some(Duration::from_millis(100)),
             PolyfillError::Api { status, .. } => {
-                if *status >= 500 {
+                if *status == 425 {
+                    // Polymarket matching engine restart: ~90s, use longer initial delay
+                    Some(Duration::from_secs(2))
+                } else if *status >= 500 {
                     Some(Duration::from_millis(500))
                 } else {
                     None

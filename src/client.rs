@@ -18,6 +18,7 @@ use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::str::FromStr;
+use tracing::warn;
 
 // Re-export types for compatibility
 pub use crate::types::{ApiCredentials as ApiCreds, OrderType, Side};
@@ -1000,7 +1001,11 @@ impl ClobClient {
         )
     }
 
-    /// Post an order to the exchange
+    /// Post an order to the exchange.
+    ///
+    /// Retries on transient errors (5xx, 425 Too Early during matching
+    /// engine restarts) with exponential backoff: 2s initial, 2x factor,
+    /// 30s cap, up to 5 attempts.
     pub async fn post_order(
         &self,
         order: SignedOrderRequest,
@@ -1015,26 +1020,79 @@ impl ClobClient {
             .as_ref()
             .ok_or_else(|| PolyfillError::auth("API credentials not set"))?;
 
-        // Owner field must reference the credential principal identifier
-        // to maintain consistency with the authentication context layer
-        let body = PostOrder::new(order, api_creds.api_key.clone(), order_type);
+        const MAX_ATTEMPTS: u32 = 5;
+        const INITIAL_DELAY_MS: u64 = 2_000;
+        const MAX_DELAY_MS: u64 = 30_000;
+        const BACKOFF_FACTOR: u64 = 2;
 
-        let headers = create_l2_headers(signer, api_creds, "POST", "/order", Some(&body))?;
-        let req = self.create_request_with_headers(Method::POST, "/order", headers.into_iter());
+        let mut delay_ms = INITIAL_DELAY_MS;
 
-        let response = req.json(&body).send().await?;
-        if !response.status().is_success() {
+        for attempt in 1..=MAX_ATTEMPTS {
+            // Rebuild body and headers each attempt (HMAC timestamps must be fresh)
+            let body = PostOrder::new(
+                order.clone(),
+                api_creds.api_key.clone(),
+                order_type,
+            );
+            let headers =
+                create_l2_headers(signer, api_creds, "POST", "/order", Some(&body))?;
+            let req =
+                self.create_request_with_headers(Method::POST, "/order", headers.into_iter());
+
+            let response = match req.json(&body).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    let err: PolyfillError = e.into();
+                    if err.is_retryable() && attempt < MAX_ATTEMPTS {
+                        warn!(
+                            attempt = attempt,
+                            max_attempts = MAX_ATTEMPTS,
+                            delay_ms = delay_ms,
+                            error = %err,
+                            "post_order transport error, retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms = (delay_ms * BACKOFF_FACTOR).min(MAX_DELAY_MS);
+                        continue;
+                    }
+                    return Err(err);
+                }
+            };
+
+            if response.status().is_success() {
+                return Ok(response.json::<Value>().await?);
+            }
+
             let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            let message = if body.is_empty() {
+            let resp_body = response.text().await.unwrap_or_default();
+            let message = if resp_body.is_empty() {
                 "Failed to post order".to_string()
             } else {
-                format!("Failed to post order: {}", body)
+                format!("Failed to post order: {}", resp_body)
             };
-            return Err(PolyfillError::api(status, message));
+            let err = PolyfillError::api(status, message);
+
+            if err.is_retryable() && attempt < MAX_ATTEMPTS {
+                warn!(
+                    attempt = attempt,
+                    max_attempts = MAX_ATTEMPTS,
+                    delay_ms = delay_ms,
+                    http_status = status,
+                    "post_order HTTP {}, retrying",
+                    status
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                delay_ms = (delay_ms * BACKOFF_FACTOR).min(MAX_DELAY_MS);
+                continue;
+            }
+
+            return Err(err);
         }
 
-        Ok(response.json::<Value>().await?)
+        // Should not reach here, but satisfy the compiler
+        Err(PolyfillError::internal_simple(
+            "post_order retry loop exhausted without returning",
+        ))
     }
 
     /// Create and post an order in one call
