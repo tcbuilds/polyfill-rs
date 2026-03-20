@@ -135,18 +135,20 @@ impl WebSocketStream {
     /// TCP_NODELAY on the underlying socket, eliminating up to 200ms of
     /// Nagle buffering delay on orderbook updates.
     async fn connect(&mut self) -> Result<()> {
-        let (ws_stream, _) =
-            tokio_tungstenite::connect_async_with_config(&self.url, None, true)
-                .await
-                .map_err(|e| {
-                    PolyfillError::stream(
-                        format!("WebSocket connection failed: {}", e),
-                        crate::errors::StreamErrorKind::ConnectionFailed,
-                    )
-                })?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async_with_config(&self.url, None, true)
+            .await
+            .map_err(|e| {
+                PolyfillError::stream(
+                    format!("WebSocket connection failed: {}", e),
+                    crate::errors::StreamErrorKind::ConnectionFailed,
+                )
+            })?;
 
         self.connection = Some(ws_stream);
-        info!("Connected to WebSocket stream at {} (TCP_NODELAY=true)", self.url);
+        info!(
+            "Connected to WebSocket stream at {} (TCP_NODELAY=true)",
+            self.url
+        );
         Ok(())
     }
 
@@ -291,7 +293,7 @@ impl WebSocketStream {
     ) -> Result<()> {
         match message {
             tokio_tungstenite::tungstenite::Message::Text(text) => {
-                debug!("Received WebSocket message: {}", text);
+                trace!("Received WebSocket message: {}", text);
 
                 // Parse the message according to Polymarket's `event_type` format
                 let stream_messages = crate::decode::parse_stream_messages(&text)?;

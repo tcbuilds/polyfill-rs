@@ -49,7 +49,10 @@ pub struct OrderBuilder {
     funder: Address,
 }
 
-/// Rounding configurations for different tick sizes
+/// Rounding configurations for different tick sizes.
+/// The `amount` field controls max decimal places on the USDC product (size * price).
+/// Polymarket API enforces max 2dp on maker_amount (BUY) and taker_amount (SELL),
+/// so all tick sizes use amount=2 to prevent order rejections.
 static ROUNDING_CONFIG: LazyLock<HashMap<Decimal, RoundConfig>> = LazyLock::new(|| {
     HashMap::from([
         (
@@ -57,7 +60,7 @@ static ROUNDING_CONFIG: LazyLock<HashMap<Decimal, RoundConfig>> = LazyLock::new(
             RoundConfig {
                 price: 1,
                 size: 2,
-                amount: 3,
+                amount: 2,
             },
         ),
         (
@@ -65,7 +68,7 @@ static ROUNDING_CONFIG: LazyLock<HashMap<Decimal, RoundConfig>> = LazyLock::new(
             RoundConfig {
                 price: 2,
                 size: 2,
-                amount: 4,
+                amount: 2,
             },
         ),
         (
@@ -73,7 +76,7 @@ static ROUNDING_CONFIG: LazyLock<HashMap<Decimal, RoundConfig>> = LazyLock::new(
             RoundConfig {
                 price: 3,
                 size: 2,
-                amount: 5,
+                amount: 2,
             },
         ),
         (
@@ -81,7 +84,7 @@ static ROUNDING_CONFIG: LazyLock<HashMap<Decimal, RoundConfig>> = LazyLock::new(
             RoundConfig {
                 price: 4,
                 size: 2,
-                amount: 6,
+                amount: 2,
             },
         ),
     ])
@@ -180,7 +183,10 @@ impl OrderBuilder {
             Side::SELL => {
                 let raw_maker_amt = size.round_dp_with_strategy(round_config.size, ToZero);
                 let raw_taker_amt = raw_maker_amt * raw_price;
-                let raw_taker_amt = self.fix_amount_rounding(raw_taker_amt, round_config);
+                // For SELL orders, taker_amount is USDC received.
+                // API requires exact precision (not truncated to 2dp like BUY maker_amount).
+                // Round to 6dp (USDC.e max precision) instead of round_config.amount.
+                let raw_taker_amt = raw_taker_amt.round_dp_with_strategy(6, ToZero);
 
                 (
                     decimal_to_token_u32(raw_maker_amt),

@@ -1029,15 +1029,9 @@ impl ClobClient {
 
         for attempt in 1..=MAX_ATTEMPTS {
             // Rebuild body and headers each attempt (HMAC timestamps must be fresh)
-            let body = PostOrder::new(
-                order.clone(),
-                api_creds.api_key.clone(),
-                order_type,
-            );
-            let headers =
-                create_l2_headers(signer, api_creds, "POST", "/order", Some(&body))?;
-            let req =
-                self.create_request_with_headers(Method::POST, "/order", headers.into_iter());
+            let body = PostOrder::new(order.clone(), api_creds.api_key.clone(), order_type);
+            let headers = create_l2_headers(signer, api_creds, "POST", "/order", Some(&body))?;
+            let req = self.create_request_with_headers(Method::POST, "/order", headers.into_iter());
 
             let response = match req.json(&body).send().await {
                 Ok(resp) => resp,
@@ -1056,7 +1050,7 @@ impl ClobClient {
                         continue;
                     }
                     return Err(err);
-                }
+                },
             };
 
             if response.status().is_success() {
@@ -1093,6 +1087,43 @@ impl ClobClient {
         Err(PolyfillError::internal_simple(
             "post_order retry loop exhausted without returning",
         ))
+    }
+
+    /// Post an order to the exchange with no client-side retries.
+    ///
+    /// Used by the aggressive fire path where latency matters more than
+    /// retrying through transient exchange hiccups on the same signal tick.
+    pub async fn post_order_fast(
+        &self,
+        order: SignedOrderRequest,
+        order_type: OrderType,
+    ) -> Result<Value> {
+        let signer = self
+            .signer
+            .as_ref()
+            .ok_or_else(|| PolyfillError::auth("Signer not set"))?;
+        let api_creds = self
+            .api_creds
+            .as_ref()
+            .ok_or_else(|| PolyfillError::auth("API credentials not set"))?;
+
+        let body = PostOrder::new(order, api_creds.api_key.clone(), order_type);
+        let headers = create_l2_headers(signer, api_creds, "POST", "/order", Some(&body))?;
+        let req = self.create_request_with_headers(Method::POST, "/order", headers.into_iter());
+        let response = req.json(&body).send().await?;
+
+        if response.status().is_success() {
+            return Ok(response.json::<Value>().await?);
+        }
+
+        let status = response.status().as_u16();
+        let resp_body = response.text().await.unwrap_or_default();
+        let message = if resp_body.is_empty() {
+            "Failed to post order".to_string()
+        } else {
+            format!("Failed to post order: {}", resp_body)
+        };
+        Err(PolyfillError::api(status, message))
     }
 
     /// Create and post an order in one call
