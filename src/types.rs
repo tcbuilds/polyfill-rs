@@ -527,23 +527,27 @@ pub struct MarketOrderArgs {
     pub amount: Decimal,
 }
 
-/// Signed order request ready for submission
+/// Signed order request ready for submission (V2 wire shape)
+///
+/// V2 dropped `taker`, `nonce`, `feeRateBps` from the signed struct and the wire body.
+/// `expiration` remains in the wire body (always "0" in practice — informational).
+/// V2 added `timestamp` (ms string), `metadata` (bytes32 hex), `builder` (bytes32 hex).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignedOrderRequest {
     pub salt: u64,
     pub maker: String,
     pub signer: String,
-    pub taker: String,
     pub token_id: String,
     pub maker_amount: String,
     pub taker_amount: String,
     pub expiration: String,
-    pub nonce: String,
-    pub fee_rate_bps: String,
     pub side: String,
     pub signature_type: u8,
     pub signature: String,
+    pub timestamp: String,
+    pub metadata: String,
+    pub builder: String,
 }
 
 /// Post order wrapper

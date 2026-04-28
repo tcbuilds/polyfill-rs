@@ -36,21 +36,22 @@ sol! {
     }
 }
 
-// EIP-712 struct for order signing
+// EIP-712 struct for order signing (V2 schema)
+// V2 dropped: taker, expiration, nonce, feeRateBps
+// V2 added: timestamp (ms), metadata (bytes32), builder (bytes32)
 sol! {
     struct Order {
         uint256 salt;
         address maker;
         address signer;
-        address taker;
         uint256 tokenId;
         uint256 makerAmount;
         uint256 takerAmount;
-        uint256 expiration;
-        uint256 nonce;
-        uint256 feeRateBps;
         uint8 side;
         uint8 signatureType;
+        uint256 timestamp;
+        bytes32 metadata;
+        bytes32 builder;
     }
 }
 
@@ -100,7 +101,7 @@ pub fn sign_order_message(
 ) -> Result<String> {
     let domain = eip712_domain!(
         name: "Polymarket CTF Exchange",
-        version: "1",
+        version: "2",
         chain_id: chain_id,
         verifying_contract: verifying_contract,
     );
