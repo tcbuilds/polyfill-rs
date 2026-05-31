@@ -26,6 +26,8 @@ pub enum SigType {
     PolyProxy = 1,
     /// EIP712 signatures signed by EOAs that own Polymarket Gnosis safes
     PolyGnosisSafe = 2,
+    /// ERC-1271 signatures for Polymarket deposit-wallet accounts
+    Poly1271 = 3,
 }
 
 /// Rounding configuration for different tick sizes
