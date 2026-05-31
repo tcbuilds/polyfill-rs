@@ -3,7 +3,7 @@
 //! This module handles the complex process of creating and signing orders
 //! for the Polymarket CLOB, including EIP-712 signature generation.
 
-use crate::auth::sign_order_message;
+use crate::auth::{sign_order_message, sign_poly1271_order_message};
 use crate::client::OrderArgs;
 use crate::errors::{PolyfillError, Result};
 use crate::types::{ExtraOrderArgs, MarketOrderArgs, OrderOptions, Side, SignedOrderRequest};
@@ -369,7 +369,14 @@ impl OrderBuilder {
             builder,
         };
 
-        let signature = sign_order_message(&self.signer, order, chain_id, exchange)?;
+        let signature = match self.sig_type {
+            SigType::Poly1271 => {
+                sign_poly1271_order_message(&self.signer, order, chain_id, exchange)?
+            },
+            SigType::Eoa | SigType::PolyProxy | SigType::PolyGnosisSafe => {
+                sign_order_message(&self.signer, order, chain_id, exchange)?
+            },
+        };
 
         Ok(SignedOrderRequest {
             salt: seed,

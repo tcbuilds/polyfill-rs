@@ -5,10 +5,10 @@
 
 use crate::errors::{PolyfillError, Result};
 use crate::types::ApiCredentials;
-use alloy_primitives::{hex::encode_prefixed, Address, U256};
+use alloy_primitives::{hex::encode_prefixed, keccak256, Address, B256, U256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::{eip712_domain, sol};
+use alloy_sol_types::{eip712_domain, sol, SolStruct, SolValue};
 use base64::engine::Engine;
 use hmac::{Hmac, Mac};
 use serde::Serialize;
@@ -25,6 +25,21 @@ const POLY_API_KEY_HEADER: &str = "poly_api_key";
 const POLY_PASS_HEADER: &str = "poly_passphrase";
 
 type Headers = HashMap<&'static str, String>;
+
+const DEPOSIT_WALLET_NAME: &str = "DepositWallet";
+const DEPOSIT_WALLET_VERSION: &str = "1";
+const ORDER_TYPE_STRING: &str = concat!(
+    "Order(uint256 salt,address maker,address signer,uint256 tokenId,",
+    "uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,",
+    "uint256 timestamp,bytes32 metadata,bytes32 builder)"
+);
+const SOLADY_TYPE_STRING: &str = concat!(
+    "TypedDataSign(Order contents,string name,string version,uint256 chainId,",
+    "address verifyingContract,bytes32 salt)",
+    "Order(uint256 salt,address maker,address signer,uint256 tokenId,",
+    "uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,",
+    "uint256 timestamp,bytes32 metadata,bytes32 builder)"
+);
 
 // EIP-712 struct for CLOB authentication
 sol! {
@@ -111,6 +126,73 @@ pub fn sign_order_message(
         .map_err(|e| PolyfillError::crypto(format!("Order signature failed: {}", e)))?;
 
     Ok(encode_prefixed(signature.as_bytes()))
+}
+
+/// Sign a deposit-wallet order using Polymarket's POLY_1271 wrapper.
+pub fn sign_poly1271_order_message(
+    signer: &PrivateKeySigner,
+    order: Order,
+    chain_id: u64,
+    verifying_contract: Address,
+) -> Result<String> {
+    let domain = eip712_domain!(
+        name: "Polymarket CTF Exchange",
+        version: "2",
+        chain_id: chain_id,
+        verifying_contract: verifying_contract,
+    );
+
+    let contents_hash = order.eip712_hash_struct();
+    let app_domain_separator = domain.hash_struct();
+    let typed_data_sign_struct_hash = keccak256(
+        (
+            keccak256(SOLADY_TYPE_STRING.as_bytes()),
+            contents_hash,
+            keccak256(DEPOSIT_WALLET_NAME.as_bytes()),
+            keccak256(DEPOSIT_WALLET_VERSION.as_bytes()),
+            U256::from(chain_id),
+            order.signer,
+            B256::ZERO,
+        )
+            .abi_encode(),
+    );
+
+    let mut digest_input = [0_u8; 66];
+    digest_input[0] = 0x19;
+    digest_input[1] = 0x01;
+    digest_input[2..34].copy_from_slice(app_domain_separator.as_slice());
+    digest_input[34..66].copy_from_slice(typed_data_sign_struct_hash.as_slice());
+    let digest = keccak256(digest_input);
+
+    let inner_signature = signer
+        .sign_hash_sync(&digest)
+        .map_err(|e| PolyfillError::crypto(format!("POLY_1271 signature failed: {}", e)))?;
+    let inner_signature = encode_prefixed(inner_signature.as_bytes());
+
+    let mut wrapped = String::with_capacity(2 + 130 + 64 + 64 + (ORDER_TYPE_STRING.len() * 2) + 4);
+    wrapped.push_str("0x");
+    wrapped.push_str(
+        inner_signature
+            .strip_prefix("0x")
+            .unwrap_or(&inner_signature),
+    );
+    push_hex(&mut wrapped, app_domain_separator.as_slice());
+    push_hex(&mut wrapped, contents_hash.as_slice());
+    push_hex(&mut wrapped, ORDER_TYPE_STRING.as_bytes());
+    let contents_type_len =
+        u16::try_from(ORDER_TYPE_STRING.len()).expect("order type string length fits in u16");
+    push_hex(&mut wrapped, &contents_type_len.to_be_bytes());
+
+    Ok(wrapped)
+}
+
+fn push_hex(out: &mut String, bytes: &[u8]) {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
+    out.reserve(bytes.len() * 2);
+    for byte in bytes {
+        out.push(LUT[(byte >> 4) as usize] as char);
+        out.push(LUT[(byte & 0x0f) as usize] as char);
+    }
 }
 
 /// Build HMAC signature for L2 authentication
@@ -367,6 +449,43 @@ mod tests {
         // EIP-712 signatures should be hex strings of specific length
         assert!(signature.starts_with("0x"));
         assert_eq!(signature.len(), 132); // 0x + 130 hex chars = 132 total
+    }
+
+    #[test]
+    fn test_poly1271_signature_is_wrapped() {
+        use alloy_primitives::{Address, B256, U256};
+        use alloy_signer_local::PrivateKeySigner;
+
+        let private_key = "0x1234567890123456789012345678901234567890123456789012345678901234";
+        let signer: PrivateKeySigner = private_key.parse().expect("Valid private key");
+        let deposit_wallet: Address = "0xf7664130be3dda5a8eea264758f744f055069251"
+            .parse()
+            .expect("valid address");
+        let exchange: Address = "0xE111180000d2663C0091e4f400237545B87B996B"
+            .parse()
+            .expect("valid address");
+        let order = Order {
+            salt: U256::from(1),
+            maker: deposit_wallet,
+            signer: deposit_wallet,
+            tokenId: U256::from(123),
+            makerAmount: U256::from(5_300_000),
+            takerAmount: U256::from(10_000_000),
+            side: 0,
+            signatureType: 3,
+            timestamp: U256::from(1_764_000_000_000_u64),
+            metadata: B256::ZERO,
+            builder: B256::ZERO,
+        };
+
+        let signature = sign_poly1271_order_message(&signer, order, 137, exchange).expect("signs");
+
+        assert!(signature.starts_with("0x"));
+        assert_eq!(
+            signature.len(),
+            2 + 130 + 64 + 64 + (ORDER_TYPE_STRING.len() * 2) + 4
+        );
+        assert!(signature.len() > 132);
     }
 
     #[test]
