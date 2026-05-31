@@ -358,7 +358,7 @@ impl OrderBuilder {
         let order = crate::auth::Order {
             salt: U256::from(seed),
             maker: self.funder,
-            signer: self.signer.address(),
+            signer: self.order_signer_address(),
             tokenId: u256_token_id,
             makerAmount: U256::from(maker_amount),
             takerAmount: U256::from(taker_amount),
@@ -374,7 +374,7 @@ impl OrderBuilder {
         Ok(SignedOrderRequest {
             salt: seed,
             maker: self.funder.to_checksum(None),
-            signer: self.signer.address().to_checksum(None),
+            signer: self.order_signer_address().to_checksum(None),
             token_id,
             maker_amount: maker_amount.to_string(),
             taker_amount: taker_amount.to_string(),
@@ -386,6 +386,13 @@ impl OrderBuilder {
             metadata: format!("0x{}", hex::encode(metadata.as_slice())),
             builder: format!("0x{}", hex::encode(builder.as_slice())),
         })
+    }
+
+    fn order_signer_address(&self) -> Address {
+        match self.sig_type {
+            SigType::Poly1271 => self.funder,
+            SigType::Eoa | SigType::PolyProxy | SigType::PolyGnosisSafe => self.signer.address(),
+        }
     }
 }
 
